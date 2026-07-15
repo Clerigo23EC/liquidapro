@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Control de Cobros - Liquida PRO</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="manifest" href="manifest.json"> <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .bg-liquida-dark { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #f97316; box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.2); }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col justify-between pb-28">
+
+  <script>
+    // URL DE GOOGLE APPS SCRIPT (Reemplázala por tu URL de implementación)
+    const API_URL = "https://script.google.com/macros/s/AKfycbyeygQ6GUFvjku1yL1aK1PSWoPzf1LnFntVyw3TU5wUFXlkUi9b-qIGVa5gcJgEirz8/exec";
+
+    // Registrar el Service Worker para trabajar offline sin dinosaurio
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').then(() => {
+        console.log("Service Worker Registrado Correctamente");
+      });
+    }
+
+    // FUNCIÓN DE CONEXIÓN PRINCIPAL CON GOOGLE SHEETS
+    function llamarAPI(action, datos = {}) {
+      if (!navigator.onLine) {
+        return Promise.reject("OFFLINE");
+      }
+      return fetch(API_URL, {
+        method: "POST",
+        body: JSON.stringify(Object.assign({ action: action }, datos))
+      }).then(res => res.json());
+    }
+  </script>
+
+  <header class="bg-liquida-dark text-white rounded-b-[2.5rem] px-6 pt-8 pb-10 shadow-2xl relative border-b border-slate-800">
+    <div class="max-w-md mx-auto">
+      <div class="flex justify-between items-center mb-4">
+        <div id="status-conexion" class="flex items-center space-x-2 px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-full text-[10px] font-black uppercase tracking-wider">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>En Línea</span>
+        </div>
+        <button id="btn-sincronizar" onclick="sincronizarColaOffline()" class="hidden flex items-center space-x-1.5 px-3 py-1 bg-orange-500 hover:bg-orange-600 text-white rounded-full text-[10px] font-black uppercase tracking-wider shadow-lg animate-bounce">
+          <span>🔄 Sincronizar (<span id="count-offline">0</span>)</span>
+        </button>
+      </div>
+
+      <div class="flex justify-between items-center mb-6">
+        <div>
+          <p class="text-orange-500 text-xs font-black tracking-widest uppercase">LIQUIDA PRO • OFFLINE</p>
+          <h1 class="text-2xl font-extrabold tracking-tight">Ruta de Cobro</h1>
+        </div>
+        <div class="w-11 h-11 rounded-2xl bg-orange-500 flex items-center justify-center border border-orange-400 shadow-lg">
+          <span class="text-md font-black text-white uppercase">LP</span>
+        </div>
+      </div>
+
+      <div class="mt-4 bg-slate-800/80 rounded-3xl p-5 border border-slate-700 shadow-inner">
+        <p class="text-slate-400 text-[10px] font-bold uppercase text-center">Cartera Activa Total</p>
+        <p id="metric-cartera" class="text-3xl font-extrabold text-white text-center mt-1">$0.00</p>
+        <div class="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-700 text-center">
+          <div>
+            <p class="text-[10px] text-slate-400 font-bold uppercase">Clientes Hoy</p>
+            <p id="metric-clientes" class="text-lg font-black text-white">0</p>
+          </div>
+          <div>
+            <p class="text-[10px] text-slate-400 font-bold uppercase">Cobrado Hoy</p>
+            <p id="metric-cobrado" class="text-lg font-black text-emerald-400">$0.00</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-md mx-auto w-full px-4 -mt-4 z-10">
+    <div id="tab-ruta" class="tab-content space-y-4">
+      <div class="bg-slate-800 p-4 rounded-3xl shadow-lg border border-slate-700 space-y-3">
+        <div class="flex justify-between items-center">
+          <span class="font-bold text-xs text-slate-300 uppercase">Seleccionar Fecha:</span>
+          <input type="date" id="filtro-fecha" onchange="cargarDatos()" class="p-2 bg-slate-900 border border-slate-700 rounded-xl text-xs font-semibold text-white">
+        </div>
+        <input type="text" id="search-ruta" oninput="filtrarRuta()" placeholder="🔍 Buscar cliente..." class="w-full p-3 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white">
+      </div>
+      <div id="lista-cobros" class="space-y-3"></div>
+    </div>
+
+    <div id="tab-registro" class="tab-content hidden space-y-5">
+      <div class="bg-slate-800 p-6 rounded-3xl border border-slate-700">
+        <h3 class="text-sm font-bold text-slate-200 uppercase mb-4">1. Registrar Nuevo Cliente</h3>
+        <form id="form-cliente" onsubmit="guardarCliente(event)" class="space-y-3">
+          <input type="text" id="c-nombre" placeholder="Nombre Completo" required class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white">
+          <input type="text" id="c-telefono" placeholder="Teléfono" required class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white">
+          <input type="text" id="c-direccion" placeholder="Dirección" required class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white">
+          <button type="submit" id="btn-cliente-submit" class="w-full bg-orange-500 text-white p-3.5 rounded-2xl font-bold text-xs uppercase tracking-wider">Registrar Cliente</button>
+        </form>
+      </div>
+
+      <div class="bg-slate-800 p-6 rounded-3xl border border-slate-700">
+        <h3 class="text-sm font-bold text-slate-200 uppercase mb-4">2. Otorgar Préstamo (20%)</h3>
+        <form id="form-prestamo" onsubmit="guardarPrestamo(event)" class="space-y-3">
+          <select id="p-cliente" required class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-slate-300"></select>
+          <input type="number" step="0.01" id="p-monto" placeholder="Monto del Capital ($)" required class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white">
+          <button type="submit" id="btn-prestamo-submit" class="w-full bg-emerald-600 text-white p-3.5 rounded-2xl font-bold text-xs uppercase">Crear Préstamo</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="tab-gastos" class="tab-content hidden space-y-5">
+      <div class="bg-slate-800 p-6 rounded-3xl border border-slate-700">
+        <h3 class="text-sm font-bold text-slate-200 uppercase mb-4">Registrar Egreso</h3>
+        <form id="form-gasto" onsubmit="guardarGasto(event)" class="space-y-3">
+          <input type="number" step="0.01" id="g-monto" placeholder="Monto ($)" required class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white">
+          <select id="g-concepto" required class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-slate-300">
+            <option value="">Concepto...</option>
+            <option value="Gasolina">Gasolina</option>
+            <option value="Alimentación">Alimentación</option>
+            <option value="Otros">Otros</option>
+          </select>
+          <input type="text" id="g-detalle" placeholder="Detalle (Opcional)" class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white">
+          <input type="text" id="g-cobrador" placeholder="Cobrador" required class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white">
+          <button type="submit" id="btn-gasto-submit" class="w-full bg-rose-600 text-white p-3.5 rounded-2xl font-bold text-xs uppercase">Registrar Gasto</button>
+        </form>
+      </div>
+    </div>
+
+    <div id="tab-caja" class="tab-content hidden space-y-4">
+      <div class="bg-slate-800 p-6 rounded-3xl border border-slate-700">
+        <h3 class="text-sm font-bold text-slate-200 uppercase mb-4">Liquidación de Caja</h3>
+        <div class="bg-slate-900 rounded-2xl p-4 border border-slate-800 font-mono text-xs space-y-3 divide-y divide-slate-800">
+          <div class="flex justify-between pb-2"><span>Fecha:</span><span id="liq-fecha" class="font-bold text-white">--/--/----</span></div>
+          <div class="flex justify-between pt-2 pb-2"><span>(+) Cobros:</span><span id="liq-cobros" class="font-bold text-emerald-400">$0.00</span></div>
+          <div class="flex justify-between pt-2 pb-2"><span>(-) Préstamos:</span><span id="liq-prestamos" class="font-bold text-rose-400">$0.00</span></div>
+          <div class="flex justify-between pt-2 pb-2"><span>(-) Gastos:</span><span id="liq-gastos" class="font-bold text-rose-400">$0.00</span></div>
+          <div class="flex justify-between pt-4 font-black text-white bg-slate-950 p-3 rounded-xl border">
+            <span>ENTREGAR EFECTIVO:</span><span id="liq-neto" class="text-orange-500">$0.00</span>
+          </div>
+        </div>
+        <button onclick="cargarCuadreCaja()" class="w-full mt-4 bg-slate-700 p-3 rounded-2xl font-bold text-xs uppercase">🔄 Actualizar Cierre</button>
+      </div>
+    </div>
+  </main>
+
+  <div id="modal-cobro" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-end justify-center p-4 hidden z-50 transition-all duration-300">
+    <div class="bg-slate-800 p-6 rounded-t-[2.5rem] rounded-b-3xl w-full max-w-md border border-slate-700 transform translate-y-10 transition-transform">
+      <h3 class="text-lg font-bold mb-4 text-slate-100">Gestionar Cobro</h3>
+      <input type="hidden" id="modal-id-cobro">
+      <input type="hidden" id="modal-index-ruta">
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">Cobrador</label>
+          <input type="text" id="modal-cobrador" class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white" required>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">Estado</label>
+          <select id="modal-estado" onchange="actualizarInterfazModal()" class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs font-bold text-white">
+            <option value="Pagado">🟢 Pagado</option>
+            <option value="Pendiente">🟡 Pendiente</option>
+            <option value="No Pagado">🔴 No Pagado</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-400 mb-1">Monto ($)</label>
+          <input type="number" step="0.01" id="modal-valor" class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs font-extrabold text-orange-500">
+        </div>
+        <div id="campo-comentario" class="hidden space-y-2">
+          <textarea id="modal-comentario" placeholder="Justificación..." class="w-full p-3.5 bg-slate-900 border border-slate-700 rounded-2xl text-xs text-white" rows="2"></textarea>
+          <div class="flex items-start space-x-2 bg-amber-950/40 p-3 rounded-2xl border">
+            <input type="checkbox" id="modal-exento" class="mt-0.5"><label for="modal-exento" class="text-xs text-amber-300">Exentar Mora</label>
+          </div>
+        </div>
+      </div>
+      <div class="flex space-x-3 mt-6">
+        <button onclick="cerrarModal()" class="w-1/2 bg-slate-700 p-3.5 rounded-2xl text-xs font-bold">Cancelar</button>
+        <button onclick="procesarCobro()" id="btn-modal-submit" class="w-1/2 bg-orange-500 text-white p-3.5 rounded-2xl text-xs font-bold">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="fixed bottom-0 left-0 right-0 custom-bottom-nav bg-slate-950/95 py-3 px-2 z-40">
+    <div class="max-w-md mx-auto flex justify-around items-center">
+      <button onclick="cambiarTab('ruta')" id="btn-tab-ruta" class="flex flex-col items-center text-orange-500"><span class="text-[9px] font-bold">Ruta</span></button>
+      <button onclick="cambiarTab('registro')" id="btn-tab-registro" class="flex flex-col items-center text-slate-500"><span class="text-[9px] font-bold">Crédito</span></button>
+      <button onclick="cambiarTab('gastos')" id="btn-tab-gastos" class="flex flex-col items-center text-slate-500"><span class="text-[9px] font-bold">Gastos</span></button>
+      <button onclick="cambiarTab('caja')" id="btn-tab-caja" class="flex flex-col items-center text-slate-500"><span class="text-[9px] font-bold">Caja</span></button>
+    </div>
+  </div>
+
+  <script>
+    let colaOffline = JSON.parse(localStorage.getItem('cola_recaudo_offline')) || [];
+
+    window.addEventListener('online', actualizarIndicadorConexion);
+    window.addEventListener('offline', actualizarIndicadorConexion);
+
+    function actualizarIndicadorConexion() {
+      const statusIndicator = document.getElementById('status-conexion');
+      if (navigator.onLine) {
+        statusIndicator.className = "flex items-center space-x-2 px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-full text-[10px] font-black uppercase";
+        statusIndicator.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span><span>En Línea</span>';
+        sincronizarColaOffline();
+      } else {
+        statusIndicator.className = "flex items-center space-x-2 px-3 py-1 bg-rose-500/20 text-rose-400 rounded-full text-[10px] font-black uppercase";
+        statusIndicator.innerHTML = '<span class="w-2 h-2 rounded-full bg-rose-500"></span><span>Sin Señal (Offline)</span>';
+      }
+      actualizarBotonSincronizacion();
+    }
+
+    function actualizarBotonSincronizacion() {
+      const btn = document.getElementById('btn-sincronizar');
+      const countLabel = document.getElementById('count-offline');
+      if (colaOffline.length > 0) {
+        btn.classList.remove('hidden');
+        countLabel.innerText = colaOffline.length;
+      } else { btn.classList.add('hidden'); }
+    }
+
+    function guardarEnColaOffline(accion, datos) {
+      colaOffline.push({ accion, datos, timestamp: new Date().getTime() });
+      localStorage.setItem('cola_recaudo_offline', JSON.stringify(colaOffline));
+      actualizarBotonSincronizacion();
+    }
+
+    function sincronizarColaOffline() {
+      if (!navigator.onLine || colaOffline.length === 0) return;
+      document.getElementById('btn-sincronizar').innerText = "🔄 ENVIANDO...";
+      procesarSiguienteRegistro(0);
+    }
+
+    function procesarSiguienteRegistro(index) {
+      if (index >= colaOffline.length) {
+        colaOffline = [];
+        localStorage.removeItem('cola_recaudo_offline');
+        actualizarBotonSincronizacion();
+        alert("¡Todo sincronizado con Google Sheets!");
+        cargarDatos();
+        return;
+      }
+      const item = colaOffline[index];
+      llamarAPI(item.accion, item.datos).then(() => {
+        procesarSiguienteRegistro(index + 1);
+      }).catch(() => {
+        alert("Error de conexión al sincronizar. Se intentará más tarde.");
+        actualizarIndicadorConexion();
+      });
+    }
+
+    function cambiarTab(tab) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.getElementById('tab-' + tab).classList.remove('hidden');
+      const buttons = { ruta: document.getElementById('btn-tab-ruta'), registro: document.getElementById('btn-tab-registro'), gastos: document.getElementById('btn-tab-gastos'), caja: document.getElementById('btn-tab-caja') };
+      Object.keys(buttons).forEach(k => { buttons[k].className = (k === tab) ? "flex flex-col items-center text-orange-500" : "flex flex-col items-center text-slate-500"; });
+      if (tab === 'registro') cargarClientes();
+      else if (tab === 'caja') cargarCuadreCaja();
+      else if (tab === 'ruta') cargarDatos();
+    }
+
+    function filtrarRuta() {
+      const query = document.getElementById('search-ruta').value.toLowerCase();
+      document.querySelectorAll('#lista-cobros > .card-cliente').forEach(card => {
+        const match = card.dataset.nombre.toLowerCase().includes(query) || card.dataset.direccion.toLowerCase().includes(query);
+        card.classList.toggle('hidden', !match);
+      });
+    }
+
+    function cargarDatos() {
+      if (navigator.onLine) {
+        cargarRuta();
+        actualizarMetricas();
+      } else {
+        cargarRutaDesdeMemoriaLocal();
+      }
+    }
+
+    function actualizarMetricas() {
+      const fecha = document.getElementById('filtro-fecha').value;
+      llamarAPI("obtenerMetricasGlobales", { fechaFiltroStr: fecha }).then(metrics => {
+        document.getElementById('metric-cartera').innerText = `$${parseFloat(metrics.carteraActiva).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+        document.getElementById('metric-clientes').innerText = metrics.clientesRuta;
+        document.getElementById('metric-cobrado').innerText = `$${parseFloat(metrics.cobradoDia).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+      });
+    }
+
+    function cargarRuta() {
+      const fecha = document.getElementById('filtro-fecha').value;
+      llamarAPI("obtenerRutaCobros", { fechaFiltroStr: fecha }).then(res => {
+        rutaActual = res.data;
+        localStorage.setItem(`ruta_respaldo_${fecha}`, JSON.stringify(rutaActual));
+        renderizarRuta(rutaActual);
+      });
+    }
+
+    function cargarRutaDesdeMemoriaLocal() {
+      const fecha = document.getElementById('filtro-fecha').value;
+      const respaldo = localStorage.getItem(`ruta_respaldo_${fecha}`);
+      if (respaldo) {
+        rutaActual = JSON.parse(respaldo);
+        renderizarRuta(rutaActual);
+      } else {
+        document.getElementById('lista-cobros').innerHTML = '<p class="text-center text-xs py-8">No hay conexión ni datos guardados para hoy.</p>';
+      }
+    }
+
+    function renderizarRuta(ruta) {
+      const contenedor = document.getElementById('lista-cobros');
+      if (ruta.length === 0) {
+        contenedor.innerHTML = '<p class="text-center text-xs py-8">Ruta vacía.</p>';
+        return;
+      }
+      contenedor.innerHTML = '';
+      ruta.forEach((item, index) => {
+        let badge = item.estadoPago === "Pagado" ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : (item.estadoPago === "No Pagado" ? "bg-rose-500/20 text-rose-400 border-rose-500/30" : "bg-amber-500/20 text-amber-400 border-amber-500/30");
+        let callBtn = item.clienteTelefono ? `<a href="tel:${item.clienteTelefono}" class="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border mr-2">📞</a>` : '';
+        contenedor.innerHTML += `
+          <div class="card-cliente bg-slate-800 p-4 rounded-3xl border-l-4 ${item.estadoPago === 'Pagado' ? 'border-emerald-500' : 'border-amber-500'} transition-all" data-nombre="${item.clienteNombre}" data-direccion="${item.clienteDireccion}">
+            <div class="flex justify-between items-start">
+              <div class="flex items-center">
+                ${callBtn}
+                <div>
+                  <h4 class="font-bold text-white text-sm">${item.clienteNombre}</h4>
+                  <p class="text-xs text-slate-400">${item.clienteDireccion}</p>
+                </div>
+              </div>
+              <span id="badge-${item.idCobro}" class="text-[9px] px-2.5 py-1 rounded-full font-black border ${badge}">${item.estadoPago.toUpperCase()}</span>
+            </div>
+            <div class="mt-4 pt-3 border-t border-slate-700/30 flex justify-between items-center text-xs">
+              <div>
+                <p>Cuota: <strong>$${parseFloat(item.valorCuota).toFixed(2)}</strong></p>
+                <p>Abono: <strong id="val-${item.idCobro}" class="text-orange-500">$${parseFloat(item.valorPagado).toFixed(2)}</strong></p>
+              </div>
+              <button onclick="abrirModal(${index})" class="bg-slate-700 text-white px-4 py-2 rounded-xl text-xs">Cobrar</button>
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    function procesarCobro() {
+      const idCobro = document.getElementById('modal-id-cobro').value;
+      const indexRuta = document.getElementById('modal-index-ruta').value;
+      const estado = document.getElementById('modal-estado').value;
+      const valor = document.getElementById('modal-valor').value;
+      const cobrador = document.getElementById('modal-cobrador').value;
+      const comentario = document.getElementById('modal-comentario').value;
+      const exento = document.getElementById('modal-exento').checked;
+
+      rutaActual[indexRuta].estadoPago = estado;
+      rutaActual[indexRuta].valorPagado = valor;
+      document.getElementById(`val-${idCobro}`).innerText = `$${parseFloat(valor).toFixed(2)}`;
+      document.getElementById(`badge-${idCobro}`).innerText = estado.toUpperCase();
+
+      const datos = { idCobro, valor, cobrador, estado, comentario, exento };
+
+      if (navigator.onLine) {
+        llamarAPI("registrarCobro", datos).then(() => {
+          cerrarModal();
+          actualizarMetricas();
+        });
+      } else {
+        guardarEnColaOffline('registrarCobro', datos);
+        alert("⚠️ Cobro guardado en memoria. Sincroniza al volver a tener señal.");
+        cerrarModal();
+      }
+    }
+
+    function guardarCliente(e) {
+      e.preventDefault();
+      const nombre = document.getElementById('c-nombre').value;
+      const telefono = document.getElementById('c-telefono').value;
+      const direccion = document.getElementById('c-direccion').value;
+      const datos = { nombre, telefono, direccion };
+
+      if (navigator.onLine) {
+        llamarAPI("agregarCliente", datos).then(() => {
+          document.getElementById('form-cliente').reset();
+          cargarClientes();
+        });
+      } else {
+        guardarEnColaOffline('agregarCliente', datos);
+        alert("⚠️ Cliente guardado localmente.");
+        document.getElementById('form-cliente').reset();
+      }
+    }
+
+    function guardarPrestamo(e) {
+      e.preventDefault();
+      const idCliente = document.getElementById('p-cliente').value;
+      const monto = document.getElementById('p-monto').value;
+      if (!navigator.onLine) { alert("Error: Se requiere internet para otorgar créditos."); return; }
+      llamarAPI("crearPrestamo", { idCliente, monto }).then(res => {
+        alert(res.message);
+        document.getElementById('form-prestamo').reset();
+        cargarDatos();
+      });
+    }
+
+    function guardarGasto(e) {
+      e.preventDefault();
+      const monto = document.getElementById('g-monto').value;
+      const concepto = document.getElementById('g-concepto').value;
+      const detalle = document.getElementById('g-detalle').value;
+      const cobrador = document.getElementById('g-cobrador').value;
+      const datos = { monto, concepto: concepto + (detalle ? " - " + detalle : ""), cobrador };
+
+      if (navigator.onLine) {
+        llamarAPI("registrarGasto", datos).then(() => {
+          document.getElementById('form-gasto').reset();
+          cambiarTab('ruta');
+        });
+      } else {
+        guardarEnColaOffline('registrarGasto', datos);
+        alert("⚠️ Gasto guardado localmente.");
+        document.getElementById('form-gasto').reset();
+      }
+    }
+
+    function cargarCuadreCaja() {
+      const fecha = document.getElementById('filtro-fecha').value;
+      llamarAPI("obtenerMetricasGlobales", { fechaFiltroStr: fecha }).then(metrics => {
+        document.getElementById('liq-cobros').innerText = `$${parseFloat(metrics.cobradoDia).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+        document.getElementById('liq-prestamos').innerText = `$${parseFloat(metrics.prestadoDia).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+        document.getElementById('liq-gastos').innerText = `$${parseFloat(metrics.gastosDia).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+        document.getElementById('liq-neto').innerText = `$${parseFloat(metrics.saldoCaja).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+      });
+    }
+
+    function cargarClientes() {
+      if (navigator.onLine) {
+        llamarAPI("obtenerClientes").then(clientes => {
+          const select = document.getElementById('p-cliente');
+          select.innerHTML = '<option value="">Seleccione...</option>';
+          clientes.forEach(c => { select.innerHTML += `<option value="${c.id}">${c.nombre}</option>`; });
+        });
+      }
+    }
+
+    function abrirModal(index) {
+      const item = rutaActual[index];
+      document.getElementById('modal-id-cobro').value = item.idCobro;
+      document.getElementById('modal-index-ruta').value = index;
+      document.getElementById('modal-estado').value = item.estadoPago;
+      document.getElementById('modal-valor').value = parseFloat(item.valorPagado || item.valorCuota).toFixed(2);
+      document.getElementById('modal-valor').dataset.sugerido = parseFloat(item.valorCuota).toFixed(2);
+      document.getElementById('modal-comentario').value = item.comentario || "";
+      document.getElementById('modal-exento').checked = item.exentoMora === 'Sí';
+      document.getElementById('modal-cobrador').value = item.cobrador || "";
+      actualizarInterfazModal();
+      document.getElementById('modal-cobro').classList.remove('hidden');
+    }
+
+    function cerrarModal() { document.getElementById('modal-cobro').classList.add('hidden'); }
+
+    function actualizarInterfazModal() {
+      const estado = document.getElementById('modal-estado').value;
+      const campoComentario = document.getElementById('campo-comentario');
+      const inputValor = document.getElementById('modal-valor');
+      if (estado === "No Pagado") { campoComentario.classList.remove('hidden'); inputValor.value = "0.00"; }
+      else { campoComentario.classList.add('hidden'); if (parseFloat(inputValor.value) === 0) inputValor.value = inputValor.dataset.sugerido; }
+    }
+
+    actualizarIndicadorConexion();
+  </script>
+</body>
+</html>
